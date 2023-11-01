@@ -1,0 +1,261 @@
+#!/bin/bash
+
+
+# HELP MENU
+display_help() {
+        echo "Usage: sudo ./IpADD [OPTIONS]"
+        echo "Options:"
+        echo " -h, --help 	Display this help message."
+        echo " --current		View the current configuration."
+	echo " --auto 		Automatically enter IP address."
+	echo " --file 		Sometime in the future you will be able to add a file. Maybe?"
+	echo " -i, --interface	Specify the network interface to configure (default: eth1)."
+
+	#Exit the script after displaying help
+	exit 0
+}
+
+
+
+# Script Must Use SUDO
+if [ "$EUID" -ne 0 ]; then
+        echo "This script must be run with sudo."
+        exit 1
+fi
+
+
+#_____________________________________________________________________________________
+# This is where I am Defining My Functions.
+
+# Define a function to validate IP addresses.
+validate_ip() {
+    local ip="$1"
+    if [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
+        return 0  # Valid IP address
+    else
+        return 1  # Invalid IP address
+    fi
+}
+
+# Define a function to validate the gateway IP address.
+validate_gw() {
+    local gw="$1"
+    if [[ $gw =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0  # Valid gateway IP address
+    else
+        return 1  # Invalid gateway IP address
+    fi
+}
+
+
+# SSG Wells helped me write a way to validate the interface.
+validate_iface() {
+        local iface="$1"
+        if ip -br a | awk -F ' ' '{print $1}' | grep -q "^$iface$"; then
+        #[$line ==$interface ]; then
+                return 0 # Valid interface
+        else
+                echo "$iface does not exist."
+                return 1 # Invalid interface
+        fi
+}
+
+
+# Funciton to replace /etc/network/interfaces with a new scenario file.
+replace_file() {
+	local file_path="$1"
+	if [ -e "$file_path" ]; then
+		echo "Replacing /etc/network/interfaces with the contents of $file_path."
+		sudo cp "$file_path" /etc/network/interfaces
+		sleep 0.5 # Pausing to let the command run
+		echo "Restarting the Network..."
+		sudo systemctl restart networking.service
+		sleep 0.5 # Pausing to let the command run
+		printf "\n"
+		echo "Network restarted."
+	else
+		echo "The specified file '$file_path' does not exist."
+	fi
+}
+
+
+
+
+#_____________________________________________________________________________________
+# Default interface
+interface="eth1"
+
+
+# Parse command-line arguments
+auto_mode=false # This tells my script if --auto option is used.
+show_current=false # This tells my script if --current is being used.
+file_mode=false # This is a test.
+
+
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+        display_help
+        exit 0
+        ;;
+        -i|--interface)
+        if [ -z "$2" ]; then
+                echo "The '-i' or '--interface' option requires an argument."
+                display_help
+                exit 1
+        fi
+        if validate_iface "$2"; then
+                interface="$2"
+        else
+                exit 1
+        fi
+        shift 2
+        ;;
+
+        ;;
+        --auto)
+        auto_mode=true
+        ;;
+        --current)
+        show_current=true
+                #IF --current is selected, set all other flags to false
+                auto_mode=false
+        ;;
+        --file)
+        if [ -z "$2" ]; then
+		echo "The '--file' option requires an argument (file path)."
+		display_help
+		exit 1
+	fi
+	replace_file "$2"
+	file_mode=true
+	exit 0
+        ;;
+        *)
+        echo "Unknown option: $1"
+        display_help
+        exit 1
+        ;;
+    esac
+    shift
+done
+
+
+#if [ "$auto_mode" != "true" ]; then
+#	echo "Right Now --auto is the only option that works."
+#	exit 1
+#fi
+
+
+
+#
+#
+# This is section of the script that starts auto portion.
+#
+#
+
+
+
+    # Prompt the user for the IP address and validate it
+if [ "$auto_mode" == "true" ]; then
+        ip_addresses=()
+        while true; do
+            read -p "Enter an IP address (example: 30.0.0.11/24) or 'done' to finish: " ip_address
+            if [ "$ip_address" == "done" ]; then
+                break # Exit the loop if the user is finished entering IP Addresses
+            elif validate_ip "$ip_address"; then
+                ip_addresses+=("$ip_address")
+            else
+                echo "Invalid IP address format. Did you forget to put the CIDR? Please try again."
+            fi
+
+        done
+fi
+
+
+# Prompt the user for the gateway IP address and validate it
+if [ "$auto_mode" == "true" ]; then
+        while true; do
+                read -p "Enter the gateway IP address (example: 30.0.0.1): " gateway
+                if validate_gw "$gateway"; then
+                        break  # Exit the loop if the gateway IP address is valid
+        else
+                echo "Invalid gateway IP address format. Please try again."
+    fi
+
+	done
+
+fi
+
+
+
+### This is the section of the script that adds to the file.
+
+if [ "$auto_mode" == "true" ] || [ "$file_mode" == "true" ]; then
+    # Shutting interface down
+    echo "Shutting $interface down..."
+    sudo ip link set $interface down
+    sleep 0.5 # Pausing to let the command run
+    ip -br a
+    printf "DOWN\n"
+
+    # Flush the interface
+    echo "Flushing interface $interface..."
+    sudo ip addr flush $interface
+    sleep 0.5 # Pausing to let the command run
+    printf "FLUSHED\n"
+
+    # Check if the file exists
+    if [ -e /etc/network/interfaces ]; then
+        echo "Configuring IP addresses..."
+        printf "\n"
+        echo "The following will be added to the end of /etc/network/interfaces"
+
+        # Adding the Multiple IP addresses
+    if ["$auto_mode" == "true" ]; then
+        for ip in "${ip_addresses[@]}"; do
+            echo "auto $interface" | sudo tee -a /etc/network/interfaces
+            echo "iface $interface inet static" | sudo tee -a /etc/network/interfaces
+            echo "address $ip" | sudo tee -a /etc/network/interfaces
+            printf "\n"
+        done
+
+        # The Gateway IP only needs to be added once
+        echo "gateway $gateway" | sudo tee -a /etc/network/interfaces
+
+    else
+        echo "The file /etc/network/interfaces does not exist."
+    fi
+
+    # Restart the Network 
+    echo "Restarting the Network..."
+    sudo systemctl restart networking.service
+    sleep 1 # Pausing to let the command run
+    printf "\n"
+    echo "Network restarted."
+
+    # Turning interface back on
+    echo "Turning $interface back to up..."
+    sudo ip link set $interface up
+    sleep 0.5 # Pausing to let the command run
+    ip -br a
+    printf "UP\n"
+fi
+
+
+
+#
+#
+# This is section of the script that ends auto portion.
+#
+#
+
+
+
+# If --current option is used, display the current contents of /etc/network/interfaces
+if [ "$show_current" == "true" ]; then
+    echo "Current contents of /etc/network/interfaces:"
+    cat /etc/network/interfaces
+    exit 0
+fi
+
