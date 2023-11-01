@@ -1,7 +1,8 @@
 # Network-Scripts
 
-display_help() <br />
+
 Usage: sudo ./IpADD [OPTIONS] <br />
+<br />
 Options: <br />
 -h, --help 	Display this help message. <br />
 --current		View the current configuration. <br />
