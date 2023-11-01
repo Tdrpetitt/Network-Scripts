@@ -1,6 +1,6 @@
 # Network-Scripts
 
-display_help() {
+display_help() <br />
 Usage: sudo ./IpADD [OPTIONS]
 Options:
 -h, --help 	Display this help message.
